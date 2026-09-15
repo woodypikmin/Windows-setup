@@ -1,11 +1,11 @@
 [package]
 name = "PikminPilotPairingHelper"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.92"
 
 [dependencies]
-idevice = { version = "0.1.65", features = [
+idevice = { version = "=0.1.61", features = [
   "core_device_proxy",
   "remote_pairing",
   "rsd",
