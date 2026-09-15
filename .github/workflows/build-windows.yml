@@ -1,0 +1,24 @@
+name: Build Pikmin Pilot Pairing Helper (Windows)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+      - name: Build release EXE
+        shell: pwsh
+        run: cargo build --release
+      - name: Smoke-test help
+        shell: pwsh
+        run: .\target\release\PikminPilotPairingHelper.exe --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PikminPilotPairingHelper-Windows-x64
+          path: target/release/PikminPilotPairingHelper.exe
+          if-no-files-found: error
