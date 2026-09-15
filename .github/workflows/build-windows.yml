@@ -11,9 +11,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.92.0
+      - name: Resolve dependencies
+        shell: pwsh
+        run: |
+          cargo generate-lockfile
+          cargo tree -p idevice
+          $resolved = cargo tree -p idevice --depth 0
+          if ($resolved -notmatch "idevice v0\.1\.61") {
+            throw "Wrong idevice version resolved: $resolved"
+          }
       - name: Build release EXE
         shell: pwsh
-        run: cargo build --release
+        run: cargo build --release --locked
       - name: Smoke-test help
         shell: pwsh
         run: .\target\release\PikminPilotPairingHelper.exe --help
