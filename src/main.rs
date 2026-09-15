@@ -1,7 +1,7 @@
 use std::{env, fs, path::PathBuf, process};
 
 use idevice::{
-    IdeviceError, RemoteXpcClient,
+    IdeviceError, IdeviceService, RemoteXpcClient,
     core_device_proxy::CoreDeviceProxy,
     provider::IdeviceProvider,
     remote_pairing::{RemotePairingClient, RpPairingFile},
