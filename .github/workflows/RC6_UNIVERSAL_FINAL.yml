@@ -1,0 +1,93 @@
+name: "RC6 UNIVERSAL SETUP - FINAL CLEAN"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      PIKMIN_BACKEND_URL: ${{ vars.PIKMIN_BACKEND_URL }}
+      EXPECTED_PAIR_SHA256: '0edd085d0e98b07f80e94d67737d7e8e150c1e14d63b1170e77b4d54e8b5f847'
+      EXPECTED_SOURCE_MARKER: 'RC6_UNIVERSAL_DYNAMIC_V2'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "RC6 FINAL identity check"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host '=================================================='
+          Write-Host 'THIS IS: RC6 UNIVERSAL SETUP - FINAL CLEAN'
+          Write-Host '=================================================='
+          Write-Host "Commit: $(git rev-parse HEAD)"
+          $path = 'WindowsSetup/src/main.rs'
+          if (-not (Test-Path $path)) { throw "Missing $path" }
+          $src = Get-Content $path -Raw
+          Write-Host '--- identity lines ---'
+          Select-String -Path $path -Pattern 'RC6_UNIVERSAL_DYNAMIC_V2|UNIVERSAL_SETUP_REVISION|SETUP_PROTOCOL|setup_protocol|Universal Release Client' | ForEach-Object { Write-Host $_.Line }
+          if (-not $src.Contains($env:EXPECTED_SOURCE_MARKER)) { throw 'RC6_FINAL_FAIL: expected RC6_UNIVERSAL_DYNAMIC_V2 marker is missing from WindowsSetup/src/main.rs' }
+          if ($src.Contains('EMBEDDED_IPA')) { throw 'RC6_FINAL_FAIL: EMBEDDED_IPA found; old embedded-IPA source is still checked out.' }
+          if ($src.Contains("app_version: &'a str")) { throw 'RC6_FINAL_FAIL: old InstallRequest app_version field is still checked out.' }
+          if (-not $src.Contains('setup_protocol: u8')) { throw 'RC6_FINAL_FAIL: setup_protocol field is missing.' }
+          if (-not $src.Contains('const SETUP_PROTOCOL: u8 = 2;')) { throw 'RC6_FINAL_FAIL: SETUP_PROTOCOL=2 marker is missing.' }
+          if (-not $src.Contains('Universal Release Client')) { throw 'RC6_FINAL_FAIL: Universal client UI marker is missing.' }
+          if (-not $env:PIKMIN_BACKEND_URL) { throw 'RC6_FINAL_FAIL: B repo variable PIKMIN_BACKEND_URL is empty.' }
+          Write-Host 'RC6_FINAL_PASS: exact Universal source is checked out.'
+
+      - name: "Verify known-good PairingHelper"
+        shell: pwsh
+        run: |
+          $pair = 'WindowsSetup/assets/PikminPilotPairingHelper.exe'
+          if (-not (Test-Path $pair)) { throw "Missing $pair" }
+          $hash = (Get-FileHash $pair -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "PairingHelper SHA256: $hash"
+          if ($hash -ne $env:EXPECTED_PAIR_SHA256) { throw "PairingHelper hash mismatch: $hash" }
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: WindowsSetup
+
+      - name: "Lock exact idevice 0.1.61"
+        working-directory: WindowsSetup
+        shell: pwsh
+        run: |
+          cargo generate-lockfile
+          cargo tree -p idevice
+          $tree = cargo tree -p idevice
+          if (($tree | Select-String -SimpleMatch 'idevice v0.1.61').Count -lt 1) { throw 'idevice pin changed' }
+
+      - name: "Build Universal Setup EXE"
+        working-directory: WindowsSetup
+        shell: pwsh
+        run: cargo build --release --locked
+
+      - name: "Verify built EXE"
+        shell: pwsh
+        run: |
+          $exe='WindowsSetup/target/release/PikminPilotSetup.exe'
+          if (-not (Test-Path $exe)) { throw "Built EXE missing: $exe" }
+          $hash=(Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "PikminPilotSetup.exe SHA256=$hash"
+          New-Item -ItemType Directory -Force delivery | Out-Null
+          Copy-Item $exe delivery/PikminPilotSetup.exe
+          "SHA256=$hash" | Set-Content -Encoding ASCII delivery/SHA256.txt
+          @"
+          Pikmin Pilot Universal Setup RC6 FINAL CLEAN
+          Source marker: RC6_UNIVERSAL_DYNAMIC_V2
+          App version is selected dynamically by the backend.
+          PikminPilot.ipa is NOT embedded in this executable.
+          PairingHelper remains the known-good validated binary.
+          "@ | Set-Content -Encoding UTF8 delivery/README.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PikminPilot-Universal-RC6-FINAL
+          path: delivery
