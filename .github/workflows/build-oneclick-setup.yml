@@ -2,14 +2,53 @@ name: Build Pikmin Pilot One-Click Setup
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'GitHub Release tag containing the signed IPA'
+        required: true
+        default: 'pikminpilot-11.5.4.17'
+      ipa_asset:
+        description: 'IPA asset filename in that Release'
+        required: true
+        default: 'PikminPilot-11.5.4.17.ipa'
+
+permissions:
+  contents: read
 
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      EXPECTED_IPA_SHA256: '2804ea514502253e520477b1859756d7335bfd2f7035dd2a234eeaaf33d9daa2'
+      EXPECTED_PAIR_SHA256: '0edd085d0e98b07f80e94d67737d7e8e150c1e14d63b1170e77b4d54e8b5f847'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify embedded payloads
+      - name: Download signed IPA from GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          IPA_ASSET: ${{ inputs.ipa_asset }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force 'WindowsSetup/assets' | Out-Null
+          Remove-Item 'WindowsSetup/assets/PikminPilot.ipa' -Force -ErrorAction SilentlyContinue
+
+          Write-Host "Downloading release tag: $env:RELEASE_TAG"
+          Write-Host "Asset: $env:IPA_ASSET"
+          gh release download $env:RELEASE_TAG `
+            --pattern $env:IPA_ASSET `
+            --dir 'WindowsSetup/assets' `
+            --clobber
+
+          $downloaded = Join-Path 'WindowsSetup/assets' $env:IPA_ASSET
+          if (!(Test-Path $downloaded)) {
+            throw "Release asset was not downloaded: $downloaded"
+          }
+          Move-Item $downloaded 'WindowsSetup/assets/PikminPilot.ipa' -Force
+
+      - name: Verify downloaded IPA and pairing helper
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -19,8 +58,19 @@ jobs:
           if (!(Test-Path $pair)) { throw "Missing $pair" }
           if ((Get-Item $ipa).Length -lt 20MB) { throw "IPA too small" }
           if ((Get-Item $pair).Length -lt 1MB) { throw "Pair helper too small" }
-          Write-Host "IPA:" (Get-FileHash $ipa -Algorithm SHA256).Hash
-          Write-Host "PAIR:" (Get-FileHash $pair -Algorithm SHA256).Hash
+
+          $ipaHash = (Get-FileHash $ipa -Algorithm SHA256).Hash.ToLowerInvariant()
+          $pairHash = (Get-FileHash $pair -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "IPA SHA256:  $ipaHash"
+          Write-Host "PAIR SHA256: $pairHash"
+
+          if ($ipaHash -ne $env:EXPECTED_IPA_SHA256) {
+            throw "Wrong IPA payload. Expected $env:EXPECTED_IPA_SHA256 but got $ipaHash"
+          }
+          if ($pairHash -ne $env:EXPECTED_PAIR_SHA256) {
+            throw "Wrong pairing helper. Expected $env:EXPECTED_PAIR_SHA256 but got $pairHash"
+          }
+          Write-Host 'Payload verification OK.'
 
       - name: Install Rust 1.92
         uses: dtolnay/rust-toolchain@stable
@@ -57,7 +107,7 @@ jobs:
           Write-Host "EXE bytes=$size"
           Write-Host "EXE SHA256=" (Get-FileHash $exe -Algorithm SHA256).Hash
 
-      - name: Assemble delivery
+      - name: Assemble friend delivery
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -66,14 +116,14 @@ jobs:
           @"
           Pikmin Pilot 11.5.4.17 Friend Setup
 
-          Friend steps:
-          1. Windows must already recognize the iPhone/iPad over USB (Apple Devices/iTunes driver).
-          2. Connect ONE iPhone/iPad by USB and unlock it.
-          3. Tap Trust if iOS asks.
-          4. Double-click PikminPilotSetup.exe.
-          5. Wait until all lines show success, then open Pikmin Pilot on the device.
+          朋友只要：
+          1. Windows 能辨識 iPhone/iPad（Apple Devices / Apple Mobile Device Support）。
+          2. USB 接上一台 iPhone/iPad並解鎖。
+          3. iOS 第一次詢問時按「信任」。
+          4. 雙擊 PikminPilotSetup.exe。
+          5. 等待全部完成，再打開裝置上的 Pikmin Pilot。
 
-          No Sideloadly, Python, CMD, PowerShell, or manual plist import is required.
+          不需要 Sideloadly、Python、CMD、PowerShell 或手動匯入 plist。
           "@ | Set-Content -Encoding UTF8 'delivery/README.txt'
           Get-FileHash 'delivery/PikminPilotSetup.exe' -Algorithm SHA256 | Format-List | Out-File 'delivery/SHA256.txt'
 
