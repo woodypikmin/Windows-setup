@@ -1,0 +1,119 @@
+Pikmin Pilot 11.5.4.17 — 你只要做這些
+========================================
+
+第一次設定 GitHub：
+
+[步驟 1] 建一個新的 GitHub repository
+例如名稱：PikminPilot-Friend-Setup
+Private 或 Public 都可以。
+
+[步驟 2] 把這個 RC2 資料夾的內容上傳到 repository
+注意：不要上傳外層 ZIP 本身，是上傳解壓後裡面的內容。
+這版 Repo 裡沒有 31 MB IPA，所以每一個檔案都在 GitHub 網頁上傳限制內。
+
+上傳完成後，repo 根目錄應該看到：
+  .github/
+  WindowsSetup/
+  OWNER_STEP_BY_STEP.txt
+  README_FIRST.txt
+  ...
+
+WindowsSetup/assets/ 裡只需要：
+  PikminPilotPairingHelper.exe
+不應該有 PikminPilot.ipa。
+
+[步驟 3] 從你原本的 PikminPilot-11.5.4.17.zip 解壓出：
+  PikminPilot-11.5.4.17.ipa
+
+這顆 IPA SHA256 應該是：
+  2804ea514502253e520477b1859756d7335bfd2f7035dd2a234eeaaf33d9daa2
+
+[步驟 4] 在同一個 GitHub repo 建 Release
+GitHub repo 頁面：
+  Releases
+  → Create a new release / Draft a new release
+
+Tag 填：
+  pikminpilot-11.5.4.17
+
+Release title 可以填：
+  Pikmin Pilot 11.5.4.17 Payload
+
+把：
+  PikminPilot-11.5.4.17.ipa
+拖到 Release 的附件區。
+
+然後 Publish release。
+
+重點：31 MB IPA 是「Release asset」，不是 repo source file，所以網頁可以上傳。
+
+[步驟 5] Build 最後的朋友安裝 EXE
+Repo 頁面：
+  Actions
+  → Build Pikmin Pilot One-Click Setup
+  → Run workflow
+
+兩個欄位保持預設即可：
+  release_tag = pikminpilot-11.5.4.17
+  ipa_asset   = PikminPilot-11.5.4.17.ipa
+
+按 Run workflow。
+
+Workflow 會自動：
+  - 從 Release 抓 IPA
+  - SHA256 驗證 IPA
+  - 驗證你的已知可用 Pairing Helper
+  - 編譯 PikminPilotSetup.exe
+
+[步驟 6] 下載朋友要用的檔案
+Actions 成功後，在該次 workflow run 最下面下載 Artifact：
+  PikminPilot-11.5.4.17-OneClick-Windows
+
+解壓後會有：
+  PikminPilotSetup.exe
+  README.txt
+  SHA256.txt
+
+朋友真正需要的核心只有：
+  PikminPilotSetup.exe
+
+==============================================================
+朋友怎麼安裝
+==============================================================
+
+朋友：
+1. Windows 安裝 Apple Devices（或已有 Apple Mobile Device Support）。
+2. USB 接 iPhone/iPad。
+3. 解鎖手機/平板。
+4. 第一次出現「信任此電腦」時按「信任」。
+5. 雙擊 PikminPilotSetup.exe。
+6. 等畫面顯示完成。
+7. 打開 iPhone/iPad 上的 Pikmin Pilot。
+
+不需要：
+- Sideloadly
+- Python
+- pymobiledevice3
+- CMD
+- PowerShell
+- 手動處理 rp_pairing_file.plist
+
+==============================================================
+目前仍存在的 Apple Development 限制
+==============================================================
+
+如果朋友的 UDID 還沒有被加入你的 Apple Developer profiles，
+Setup 會抓到 UDID，但 IPA 仍會被 iOS 拒絕安裝。
+
+這不是 Setup.exe 或 pairing 的問題，而是 Development provisioning 限制。
+
+遇到這種情況：
+- Setup 會在朋友桌面建立 PikminPilot-UDID.txt
+- 朋友把它傳給你
+- 你把 UDID 加到 Apple Developer
+- App / Tunnel / Runner profiles 都包含該裝置
+- 重簽新的 11.5.4.17 IPA
+
+之後可以建立新的 Release asset / builder。
+
+未來要做到「任何新朋友第一次插線就全自動」，下一階段才需要 backend + App Store Connect API 自動註冊 UDID / 重簽。

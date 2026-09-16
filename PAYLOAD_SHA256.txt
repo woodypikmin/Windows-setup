@@ -1,0 +1,5 @@
+Pikmin Pilot 11.5.4.17 signed IPA (stored as GitHub Release asset, NOT in repo)
+2804ea514502253e520477b1859756d7335bfd2f7035dd2a234eeaaf33d9daa2  PikminPilot-11.5.4.17.ipa
+
+Known-good pairing helper (stored in repo)
+0edd085d0e98b07f80e94d67737d7e8e150c1e14d63b1170e77b4d54e8b5f847  WindowsSetup/assets/PikminPilotPairingHelper.exe

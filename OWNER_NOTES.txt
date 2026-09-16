@@ -1,0 +1,18 @@
+RC2 RELEASE-ASSET ARCHITECTURE
+==============================
+
+Stable application payload: Pikmin Pilot 11.5.4.17
+Pairing engine: uploaded, hardware-tested PikminPilotPairingHelper.exe
+
+Repository deliberately DOES NOT contain PikminPilot.ipa.
+Workflow downloads it from GitHub Release tag:
+  pikminpilot-11.5.4.17
+asset:
+  PikminPilot-11.5.4.17.ipa
+
+Pinned payload SHA256:
+IPA  2804ea514502253e520477b1859756d7335bfd2f7035dd2a234eeaaf33d9daa2
+PAIR 0edd085d0e98b07f80e94d67737d7e8e150c1e14d63b1170e77b4d54e8b5f847
+
+The Rust source still uses include_bytes!("../assets/PikminPilot.ipa").
+This is intentional: GitHub Actions downloads the Release asset into that path BEFORE cargo build, so the final friend-facing Setup remains a single self-contained EXE.
