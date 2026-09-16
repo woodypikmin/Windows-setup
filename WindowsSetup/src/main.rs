@@ -276,28 +276,64 @@ async fn install_or_upgrade(provider: &dyn IdeviceProvider, udid: &str) -> Resul
     }
 }
 
+async fn wait_for_app_registration(provider: &dyn IdeviceProvider) -> Result<(), String> {
+    // InstallationProxy may report install completion slightly before all services see
+    // the refreshed app registration. Poll the authoritative installed-app lookup with
+    // a fresh client each time before opening House Arrest.
+    for attempt in 1..=20 {
+        match app_is_installed(provider).await {
+            Ok(true) => {
+                if attempt > 1 {
+                    println!("      ✅ app registration ready after {attempt} checks");
+                }
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(e) => {
+                if attempt == 20 {
+                    return Err(format!("InstallationProxy lookup failed: {e:?}"));
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    Err(format!("{APP_BUNDLE_ID} did not appear in InstallationProxy after install"))
+}
+
 async fn inject_pairing(provider: &dyn IdeviceProvider, pairing: &[u8]) -> Result<(), String> {
     println!("[4/5] 把 pairing 自動寫進 Pikmin Pilot...");
+
+    // IMPORTANT: the signed 11.5.4.17 IPA intentionally does not advertise
+    // UIFileSharingEnabled. On modern iOS, House Arrest VendDocuments can therefore
+    // return InstallationLookupFailed even though the app is correctly installed.
+    // VendContainer does not depend on Files/iTunes document-sharing opt-in. It gives
+    // us the app container, from which /Documents is writable by AFC.
+    wait_for_app_registration(provider).await?;
+    println!("      House Arrest mode: VendContainer → /Documents (no UIFileSharingEnabled required)");
+
     let mut last_error = String::new();
-    for attempt in 1..=10 {
+    for attempt in 1..=12 {
         let house = match HouseArrestClient::connect(provider).await {
             Ok(v) => v,
             Err(e) => {
                 last_error = format!("HouseArrest connect: {e:?}");
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                continue;
-            }
-        };
-        let mut afc = match house.vend_documents(APP_BUNDLE_ID.to_string()).await {
-            Ok(v) => v,
-            Err(e) => {
-                last_error = format!("VendDocuments: {e:?}");
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                println!("      ⚠ injection attempt {attempt}/12: {last_error}");
+                tokio::time::sleep(Duration::from_millis(1200)).await;
                 continue;
             }
         };
 
-        // idevice vend_documents exposes an AFC view where /Documents is the writable target.
+        let mut afc = match house.vend_container(APP_BUNDLE_ID.to_string()).await {
+            Ok(v) => v,
+            Err(e) => {
+                last_error = format!("VendContainer: {e:?}");
+                println!("      ⚠ injection attempt {attempt}/12: {last_error}");
+                // Reconnect House Arrest on the next pass; do not reuse a vend session.
+                tokio::time::sleep(Duration::from_millis(1200)).await;
+                continue;
+            }
+        };
+
         let path = format!("/Documents/{PAIRING_NAME}");
         let write_result = async {
             let mut file = afc
@@ -340,10 +376,10 @@ async fn inject_pairing(provider: &dyn IdeviceProvider, pairing: &[u8]) -> Resul
             }
             Err(e) => {
                 last_error = e;
-                println!("      ⚠ injection attempt {attempt}/10 failed; retrying...");
+                println!("      ⚠ injection attempt {attempt}/12 failed: {last_error}");
             }
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_millis(1200)).await;
     }
     Err(format!("pairing injection failed after retries: {last_error}"))
 }
@@ -391,8 +427,7 @@ async fn main() {
         fail(args.no_pause, 30, e);
     }
 
-    // Give installation proxy a short moment to publish the new app container to HouseArrest.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // App-registration readiness is polled inside inject_pairing(); no blind fixed delay.
 
     if let Err(e) = inject_pairing(&provider, &pairing_bytes).await {
         fail(
