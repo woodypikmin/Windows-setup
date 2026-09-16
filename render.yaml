@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: pikminpilot-backend
+    runtime: python
+    plan: free
+    region: singapore
+    rootDir: RenderBackend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: JOB_DIR
+        value: /tmp/pikminpilot-jobs
+      - key: ASC_PRIVATE_KEY_PATH
+        value: /etc/secrets/AuthKey.p8
+      - key: ASC_KEY_ID
+        sync: false
+      - key: ASC_ISSUER_ID
+        sync: false
+      - key: ASC_CERTIFICATE_ID
+        sync: false
+      - key: GITHUB_OWNER
+        value: woodypikmin
+      - key: GITHUB_REPO_A
+        sync: false
+      - key: GITHUB_REF
+        value: main
+      - key: GITHUB_WORKFLOW
+        value: rc5-provision-sign.yml
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: BACKEND_WORKFLOW_TOKEN
+        sync: false
+      - key: APPLE_PROFILE_CREATE_ATTEMPTS
+        value: "3"
+      - key: APPLE_PROFILE_RETRY_SECONDS
+        value: "8"
+      - key: MAX_IPA_BYTES
+        value: "157286400"

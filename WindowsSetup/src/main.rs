@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const APP_BUNDLE_ID: &str = "com.woodypikmin.pikminpilot";
-const UNIVERSAL_SETUP_REVISION: &str = "RC6_UNIVERSAL_DYNAMIC_V2";
+const UNIVERSAL_SETUP_REVISION: &str = "RC6_RENDER_STABLE_V1";
 const SETUP_PROTOCOL: u8 = 2;
 const PAIRING_NAME: &str = "rp_pairing_file.plist";
 const EMBEDDED_PAIR_HELPER: &[u8] = include_bytes!("../assets/PikminPilotPairingHelper.exe");
@@ -197,21 +197,45 @@ async fn wait_for_usb_device(requested: Option<&str>) -> Result<UsbmuxdDevice, S
 async fn request_cloud_job(client: &reqwest::Client, base: &str, udid: &str) -> Result<InstallCreated, String> {
     println!("[2/7] 取得目前版本並準備 provisioning / signed IPA...");
     let endpoint = format!("{base}/api/v1/install");
-    let response = client.post(endpoint)
-        .json(&InstallRequest { udid, platform: "IOS", setup_protocol: SETUP_PROTOCOL })
-        .send().await.map_err(|e| format!("backend request failed: {e}"))?;
-    if !response.status().is_success() {
-        let code = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("backend rejected install request: HTTP {code} {body}"));
+    let mut last_error = String::new();
+    for attempt in 1..=12 {
+        match client
+            .post(&endpoint)
+            .json(&InstallRequest { udid, platform: "IOS", setup_protocol: SETUP_PROTOCOL })
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                let created: InstallCreated = response
+                    .json()
+                    .await
+                    .map_err(|e| format!("invalid backend response: {e}"))?;
+                if created.app_version.trim().is_empty() {
+                    return Err("backend response missing app_version".into());
+                }
+                println!("      target version: {}", created.app_version);
+                println!("      cloud job: {} ({})", created.job_id, created.status);
+                return Ok(created);
+            }
+            Ok(response) => {
+                let code = response.status();
+                let retryable = code.as_u16() == 429 || code.as_u16() == 502 || code.as_u16() == 503 || code.as_u16() == 504;
+                let body = response.text().await.unwrap_or_default();
+                last_error = format!("HTTP {code} {body}");
+                if !retryable {
+                    return Err(format!("backend rejected install request: {last_error}"));
+                }
+            }
+            Err(e) => {
+                last_error = format!("{e}");
+            }
+        }
+        if attempt < 12 {
+            println!("      backend 正在喚醒/重試 ({attempt}/12)...");
+            tokio::time::sleep(Duration::from_secs(8)).await;
+        }
     }
-    let created: InstallCreated = response.json().await.map_err(|e| format!("invalid backend response: {e}"))?;
-    if created.app_version.trim().is_empty() {
-        return Err("backend response missing app_version".into());
-    }
-    println!("      target version: {}", created.app_version);
-    println!("      cloud job: {} ({})", created.job_id, created.status);
-    Ok(created)
+    Err(format!("backend 目前無法連線；已自動重試。最後錯誤：{last_error}"))
 }
 
 async fn wait_cloud_ipa(client: &reqwest::Client, base: &str, job_id: &str, expected_version: &str) -> Result<Vec<u8>, String> {
@@ -520,9 +544,9 @@ async fn main() {
 
     let base = backend_url().unwrap_or_else(|e| fail(args.no_pause, 11, e));
     let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(120))
-        .user_agent("PikminPilotSetup/universal-2")
+        .connect_timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(180))
+        .user_agent("PikminPilotSetup/render-stable-1")
         .build().unwrap_or_else(|e| fail(args.no_pause, 11, format!("HTTP client: {e}")));
 
     let cloud = request_cloud_job(&client, &base, &device.udid).await
