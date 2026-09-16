@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const APP_BUNDLE_ID: &str = "com.woodypikmin.pikminpilot";
-const APP_VERSION: &str = "11.5.4.17";
 const PAIRING_NAME: &str = "rp_pairing_file.plist";
 const EMBEDDED_PAIR_HELPER: &[u8] = include_bytes!("../assets/PikminPilotPairingHelper.exe");
 const COMPILED_BACKEND_URL: Option<&str> = option_env!("PIKMIN_BACKEND_URL");
@@ -35,20 +34,22 @@ struct Args {
 #[derive(Serialize)]
 struct InstallRequest<'a> {
     udid: &'a str,
-    app_version: &'a str,
     platform: &'a str,
+    setup_protocol: u8,
 }
 
 #[derive(Deserialize)]
 struct InstallCreated {
     job_id: String,
     status: String,
+    app_version: String,
 }
 
 #[derive(Deserialize, Debug)]
 struct InstallStatus {
     status: String,
     message: Option<String>,
+    app_version: Option<String>,
     download_url: Option<String>,
     sha256: Option<String>,
 }
@@ -99,10 +100,10 @@ fn fail(no_pause: bool, code: i32, message: impl AsRef<str>) -> ! {
 
 fn print_header() {
     println!("============================================================");
-    println!(" Pikmin Pilot One-Click Setup RC4  •  App {APP_VERSION}");
+    println!(" Pikmin Pilot One-Click Setup  •  Universal Release Client");
     println!("============================================================");
     println!("USB 接上 → 解鎖 → iPhone/iPad 若詢問請按『信任』。");
-    println!("IPA 由 Pikmin Pilot backend 依裝置 provisioning 狀態提供。\n");
+    println!("目前 App 版本由 Pikmin Pilot backend 動態決定；Setup.exe 不需隨 App 升版重發。\n");
 }
 
 fn setup_root() -> PathBuf {
@@ -119,7 +120,7 @@ fn backend_url() -> Result<String, String> {
         .unwrap_or_default();
     let url = raw.trim().trim_end_matches('/').to_string();
     if url.is_empty() || url.contains("CHANGE-ME") {
-        return Err("RC4 尚未設定 PIKMIN_BACKEND_URL。請由 owner build 正式 Setup.exe。".into());
+        return Err("Universal Setup 尚未設定 PIKMIN_BACKEND_URL。請由 owner build 正式 Setup.exe。".into());
     }
     if !url.starts_with("https://")
         && !url.starts_with("http://127.0.0.1")
@@ -132,7 +133,7 @@ fn backend_url() -> Result<String, String> {
 
 fn write_udid_note(udid: &str) {
     let text = format!(
-        "Pikmin Pilot device UDID\r\n\r\n{udid}\r\n\r\nRC4 cloud provisioning uses this UDID automatically.\r\n"
+        "Pikmin Pilot device UDID\r\n\r\n{udid}\r\n\r\nUniversal cloud provisioning uses this UDID automatically.\r\n"
     );
     let path = env::var_os("USERPROFILE")
         .map(PathBuf::from)
@@ -190,11 +191,11 @@ async fn wait_for_usb_device(requested: Option<&str>) -> Result<UsbmuxdDevice, S
     }
 }
 
-async fn request_cloud_job(client: &reqwest::Client, base: &str, udid: &str) -> Result<String, String> {
-    println!("[2/7] 準備裝置 provisioning / signed IPA...");
+async fn request_cloud_job(client: &reqwest::Client, base: &str, udid: &str) -> Result<InstallCreated, String> {
+    println!("[2/7] 取得目前版本並準備 provisioning / signed IPA...");
     let endpoint = format!("{base}/api/v1/install");
     let response = client.post(endpoint)
-        .json(&InstallRequest { udid, app_version: APP_VERSION, platform: "IOS" })
+        .json(&InstallRequest { udid, platform: "IOS", setup_protocol: 2 })
         .send().await.map_err(|e| format!("backend request failed: {e}"))?;
     if !response.status().is_success() {
         let code = response.status();
@@ -202,11 +203,15 @@ async fn request_cloud_job(client: &reqwest::Client, base: &str, udid: &str) -> 
         return Err(format!("backend rejected install request: HTTP {code} {body}"));
     }
     let created: InstallCreated = response.json().await.map_err(|e| format!("invalid backend response: {e}"))?;
+    if created.app_version.trim().is_empty() {
+        return Err("backend response missing app_version".into());
+    }
+    println!("      target version: {}", created.app_version);
     println!("      cloud job: {} ({})", created.job_id, created.status);
-    Ok(created.job_id)
+    Ok(created)
 }
 
-async fn wait_cloud_ipa(client: &reqwest::Client, base: &str, job_id: &str) -> Result<Vec<u8>, String> {
+async fn wait_cloud_ipa(client: &reqwest::Client, base: &str, job_id: &str, expected_version: &str) -> Result<Vec<u8>, String> {
     println!("[4/7] 等待 signed IPA...");
     let endpoint = format!("{base}/api/v1/install/{job_id}");
     let mut last_status = String::new();
@@ -218,6 +223,11 @@ async fn wait_cloud_ipa(client: &reqwest::Client, base: &str, job_id: &str) -> R
             return Err(format!("backend status HTTP {code}: {body}"));
         }
         let status: InstallStatus = response.json().await.map_err(|e| format!("invalid backend status: {e}"))?;
+        if let Some(ref status_version) = status.app_version {
+            if status_version != expected_version {
+                return Err(format!("backend changed app version during job: expected {expected_version}, got {status_version}"));
+            }
+        }
         if status.status != last_status {
             println!("      status: {}{}", status.status,
                 status.message.as_deref().map(|m| format!(" — {m}")).unwrap_or_default());
@@ -320,12 +330,12 @@ async fn app_is_installed(provider: &dyn IdeviceProvider) -> Result<bool, Idevic
     Ok(apps.contains_key(APP_BUNDLE_ID))
 }
 
-async fn install_or_upgrade(provider: &dyn IdeviceProvider, udid: &str, ipa: &[u8]) -> Result<(), String> {
+async fn install_or_upgrade(provider: &dyn IdeviceProvider, udid: &str, ipa: &[u8], app_version: &str) -> Result<(), String> {
     if ipa.len() < 1024 * 1024 {
         return Err("Backend 回傳的 Pikmin Pilot IPA 無效。".into());
     }
 
-    println!("[5/7] 安裝 Pikmin Pilot {APP_VERSION}...");
+    println!("[5/7] 安裝 Pikmin Pilot {app_version}...");
     let installed = app_is_installed(provider).await.unwrap_or(false);
     let result = if installed {
         println!("      已存在 Pikmin Pilot，執行 upgrade（保留 App container）...");
@@ -362,7 +372,7 @@ async fn install_or_upgrade(provider: &dyn IdeviceProvider, udid: &str, ipa: &[u
                 || lower.contains("applicationverificationfailed")
             {
                 Err(format!(
-                    "iOS 拒絕安裝：這台裝置 UDID 很可能尚未包含在目前 Development profiles。\nUDID={udid}\nRC4 backend 已嘗試自動 provisioning；若仍失敗請保留錯誤訊息供 owner 檢查。\n原始錯誤：{text}"
+                    "iOS 拒絕安裝：這台裝置 UDID 很可能尚未包含在目前 Development profiles。\nUDID={udid}\nUniversal backend 已嘗試自動 provisioning；若仍失敗請保留錯誤訊息供 owner 檢查。\n原始錯誤：{text}"
                 ))
             } else {
                 Err(format!("IPA install failed: {text}"))
@@ -398,7 +408,7 @@ async fn wait_for_app_registration(provider: &dyn IdeviceProvider) -> Result<(),
 async fn inject_pairing(provider: &dyn IdeviceProvider, pairing: &[u8]) -> Result<(), String> {
     println!("[6/7] 把 pairing 自動寫進 Pikmin Pilot...");
 
-    // IMPORTANT: the signed 11.5.4.17 IPA intentionally does not advertise
+    // IMPORTANT: the known-good Pikmin Pilot IPA intentionally does not advertise
     // UIFileSharingEnabled. On modern iOS, House Arrest VendDocuments can therefore
     // return InstallationLookupFailed even though the app is correctly installed.
     // VendContainer does not depend on Files/iTunes document-sharing opt-in. It gives
@@ -479,9 +489,9 @@ async fn inject_pairing(provider: &dyn IdeviceProvider, pairing: &[u8]) -> Resul
     Err(format!("pairing injection failed after retries: {last_error}"))
 }
 
-fn print_success(udid: &str) {
+fn print_success(udid: &str, app_version: &str) {
     println!("[7/7] 完成\n");
-    println!("✅ Pikmin Pilot {APP_VERSION} 已安裝");
+    println!("✅ Pikmin Pilot {app_version} 已安裝");
     println!("✅ Device UDID: {udid}");
     println!("✅ signed IPA SHA256 已驗證");
     println!("✅ 此裝置專屬 RPPairing 已建立");
@@ -509,24 +519,26 @@ async fn main() {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(120))
-        .user_agent(format!("PikminPilotSetup/{APP_VERSION}"))
+        .user_agent("PikminPilotSetup/universal-2")
         .build().unwrap_or_else(|e| fail(args.no_pause, 11, format!("HTTP client: {e}")));
 
-    let job_id = request_cloud_job(&client, &base, &device.udid).await
+    let cloud = request_cloud_job(&client, &base, &device.udid).await
         .unwrap_or_else(|e| fail(args.no_pause, 12, e));
+    let app_version = cloud.app_version.clone();
+    let job_id = cloud.job_id;
 
     // Keep RC3's hardware-validated pairing engine unchanged while cloud provisioning proceeds.
     let pairing_bytes = run_known_good_pair_helper(&device.udid).await
         .unwrap_or_else(|e| fail(args.no_pause, 20, format!("{e}\n保持 USB 連接、裝置解鎖並已按『信任』後重跑 Setup。")));
 
-    let ipa = wait_cloud_ipa(&client, &base, &job_id).await
+    let ipa = wait_cloud_ipa(&client, &base, &job_id, &app_version).await
         .unwrap_or_else(|e| fail(args.no_pause, 25, e));
 
     let provider = device.to_provider(UsbmuxdAddr::default(), "PikminPilotSetup");
-    if let Err(e) = install_or_upgrade(&provider, &device.udid, &ipa).await { fail(args.no_pause, 30, e); }
+    if let Err(e) = install_or_upgrade(&provider, &device.udid, &ipa, &app_version).await { fail(args.no_pause, 30, e); }
     if let Err(e) = inject_pairing(&provider, &pairing_bytes).await {
         fail(args.no_pause, 40, format!("{e}\nApp 已安裝、pairing 也已備份；保持 USB 連接後直接重跑 Setup。"));
     }
-    print_success(&device.udid);
+    print_success(&device.udid, &app_version);
     pause_if_needed(args.no_pause);
 }
