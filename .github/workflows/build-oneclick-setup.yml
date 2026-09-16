@@ -1,0 +1,83 @@
+name: Build Pikmin Pilot One-Click Setup
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify embedded payloads
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ipa = 'WindowsSetup/assets/PikminPilot.ipa'
+          $pair = 'WindowsSetup/assets/PikminPilotPairingHelper.exe'
+          if (!(Test-Path $ipa)) { throw "Missing $ipa" }
+          if (!(Test-Path $pair)) { throw "Missing $pair" }
+          if ((Get-Item $ipa).Length -lt 20MB) { throw "IPA too small" }
+          if ((Get-Item $pair).Length -lt 1MB) { throw "Pair helper too small" }
+          Write-Host "IPA:" (Get-FileHash $ipa -Algorithm SHA256).Hash
+          Write-Host "PAIR:" (Get-FileHash $pair -Algorithm SHA256).Hash
+
+      - name: Install Rust 1.92
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: WindowsSetup
+
+      - name: Resolve and assert idevice pin
+        working-directory: WindowsSetup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo generate-lockfile
+          $tree = cargo tree -p idevice
+          $tree | Write-Host
+          if (($tree | Select-String -SimpleMatch 'idevice v0.1.61').Count -lt 1) {
+            throw 'idevice did not resolve to exact 0.1.61'
+          }
+
+      - name: Build single EXE
+        working-directory: WindowsSetup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --release --locked
+          $exe = 'target/release/PikminPilotSetup.exe'
+          if (!(Test-Path $exe)) { throw 'PikminPilotSetup.exe not produced' }
+          $size = (Get-Item $exe).Length
+          if ($size -lt 25MB) { throw "Setup EXE unexpectedly small: $size" }
+          Write-Host "EXE bytes=$size"
+          Write-Host "EXE SHA256=" (Get-FileHash $exe -Algorithm SHA256).Hash
+
+      - name: Assemble delivery
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force 'delivery' | Out-Null
+          Copy-Item 'WindowsSetup/target/release/PikminPilotSetup.exe' 'delivery/PikminPilotSetup.exe'
+          @"
+          Pikmin Pilot 11.5.4.17 Friend Setup
+
+          Friend steps:
+          1. Windows must already recognize the iPhone/iPad over USB (Apple Devices/iTunes driver).
+          2. Connect ONE iPhone/iPad by USB and unlock it.
+          3. Tap Trust if iOS asks.
+          4. Double-click PikminPilotSetup.exe.
+          5. Wait until all lines show success, then open Pikmin Pilot on the device.
+
+          No Sideloadly, Python, CMD, PowerShell, or manual plist import is required.
+          "@ | Set-Content -Encoding UTF8 'delivery/README.txt'
+          Get-FileHash 'delivery/PikminPilotSetup.exe' -Algorithm SHA256 | Format-List | Out-File 'delivery/SHA256.txt'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PikminPilot-11.5.4.17-OneClick-Windows
+          path: delivery
