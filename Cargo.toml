@@ -1,0 +1,28 @@
+[package]
+name = "pikmin-pilot-setup"
+version = "11.5.4"
+edition = "2024"
+rust-version = "1.92"
+
+[[bin]]
+name = "PikminPilotSetup"
+path = "src/main.rs"
+
+[dependencies]
+idevice = { version = "=0.1.61", features = [
+  "usbmuxd",
+  "installation_proxy",
+  "afc",
+  "house_arrest",
+] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "s"
+strip = true
+panic = "abort"
