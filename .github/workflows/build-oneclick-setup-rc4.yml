@@ -1,0 +1,57 @@
+name: Build Pikmin Pilot RC4 Windows Setup
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      # Public URL only. This is intentionally NOT a secret credential.
+      PIKMIN_BACKEND_URL: ${{ vars.PIKMIN_BACKEND_URL }}
+      EXPECTED_PAIR_SHA256: '0edd085d0e98b07f80e94d67737d7e8e150c1e14d63b1170e77b4d54e8b5f847'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify pairing helper
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:PIKMIN_BACKEND_URL) { throw 'Repository variable PIKMIN_BACKEND_URL is empty' }
+          $pair = 'WindowsSetup/assets/PikminPilotPairingHelper.exe'
+          $pairHash = (Get-FileHash $pair -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($pairHash -ne $env:EXPECTED_PAIR_SHA256) { throw "Wrong pairing helper: $pairHash" }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: WindowsSetup
+      - name: Resolve exact idevice 0.1.61
+        working-directory: WindowsSetup
+        shell: pwsh
+        run: |
+          cargo generate-lockfile
+          $tree = cargo tree -p idevice
+          if (($tree | Select-String -SimpleMatch 'idevice v0.1.61').Count -lt 1) { throw 'idevice pin changed' }
+      - name: Build RC4 EXE
+        working-directory: WindowsSetup
+        shell: pwsh
+        run: cargo build --release --locked
+      - name: Assemble delivery
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force delivery | Out-Null
+          Copy-Item WindowsSetup/target/release/PikminPilotSetup.exe delivery/PikminPilotSetup.exe
+          Get-FileHash delivery/PikminPilotSetup.exe -Algorithm SHA256 | Format-List | Out-File delivery/SHA256.txt
+          @"
+          Pikmin Pilot 11.5.4.17 RC4 Cloud Provisioning Setup
+          USB → Trust → PikminPilotSetup.exe
+          No Python / Sideloadly / manual plist / Apple Developer steps on friend's PC.
+          "@ | Set-Content -Encoding UTF8 delivery/README.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PikminPilot-11.5.4.17-RC4-Windows
+          path: delivery
