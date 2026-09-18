@@ -1,6 +1,6 @@
 {
-  "app_version": "11.5.4.31",
+  "app_version": "11.5.4.32",
   "baseline_repo": "woodypikmin/Windows-setup",
-  "release_tag": "pikminpilot-11.5.4.31",
-  "ipa_asset": "PikminPilot-11.5.4.31.ipa"
+  "release_tag": "Pikminpilot-11.5.4.32",
+  "ipa_asset": "PikminPilot-11.5.4.32.ipa"
 }
